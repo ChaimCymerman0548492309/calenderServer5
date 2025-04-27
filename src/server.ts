@@ -143,6 +143,10 @@ const getMeHandler: RequestHandler = (req: AuthenticatedRequest, res) => {
   res.send(req.user);
 };
 
+const getIsAlive = (req: Request, res : Response) => {
+    res.status(200).send({ message: 'server is Alive !!' });
+};
+
 const getEventsHandler: RequestHandler = async (req: AuthenticatedRequest, res) => {
   try {
     const events = await Event.find({ user: req.user?._id });
@@ -205,6 +209,7 @@ app.post('/api/auth/register', registerHandler);
 app.post('/api/auth/login', loginHandler);
 app.get('/api/auth/me', authenticate, getMeHandler);
 app.get('/api/events', authenticate, getEventsHandler);
+app.get('/api', getIsAlive );
 app.post('/api/events', authenticate, createEventHandler);
 app.put('/api/events/:id', authenticate, updateEventHandler);
 app.delete('/api/events/:id', authenticate, deleteEventHandler);
