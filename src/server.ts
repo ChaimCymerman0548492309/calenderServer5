@@ -6,14 +6,23 @@ import cors from 'cors';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import { fillFormDemoQA } from './DemoQA';
+import { Employee, Event, User } from './DB';
 
 dotenv.config();
 
 // Extend the Request interface to include our custom properties
-interface AuthenticatedRequest extends Request {
+export interface AuthenticatedRequest extends Request {
   user?: any;
   token?: string;
 }
+export type AsyncRequestHandler = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => Promise<void>;
+
+// fillFormDemoQA()ְ
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -37,38 +46,7 @@ mongoose.connect(mongoURI, {
   .catch(error => console.error('❌ Connection error:', error));
 
 // User model
-interface IUser extends Document {
-  username: string;
-  password: string;
-}
 
-const userSchema = new Schema<IUser>({
-  username: { type: String, required: true, unique: true },
-  password: { type: String, required: true }
-});
-
-const User = mongoose.model<IUser>('User', userSchema);
-
-// Event model
-interface IEvent extends Document {
-  title: string;
-  start: Date;
-  end: Date;
-  allDay?: boolean;
-  color?: string;
-  user: Schema.Types.ObjectId;
-}
-
-const eventSchema = new Schema<IEvent>({
-  title: { type: String, required: true },
-  start: { type: Date, required: true },
-  end: { type: Date, required: true },
-  allDay: { type: Boolean, default: false },
-  color: { type: String },
-  user: { type: Schema.Types.ObjectId, ref: 'User', required: true }
-});
-
-const Event = mongoose.model<IEvent>('Event', eventSchema);
 
 // Authentication middleware
 const authenticate: RequestHandler = async (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -208,6 +186,196 @@ const deleteEventHandler = async (req: AuthenticatedRequest, res : any) => {
   }
 };
 
+// ===== Employee Routes =====
+const createEmployeeHandler = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const employee = new Employee({
+      ...req.body,
+      user: req.user?._id
+    });
+    await employee.save();
+    res.status(201).send(employee);
+  } catch (error) {
+    res.status(500).send({ message: 'Error creating employee' });
+  }
+};
+
+const getEmployeesHandler = async (req: AuthenticatedRequest, res: Response) => {
+  try {
+    const employees = await Employee.find({ user: req.user?._id });
+    res.send(employees);
+  } catch (error) {
+    res.status(500).send({ message: 'Error fetching employees' });
+  }
+};
+
+const updateEmployeeHandler = async (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  try {
+    const employee = await Employee.findOneAndUpdate(
+      { _id: req.params.id, user: req.user?._id },
+      req.body,
+      { new: true }
+    );
+
+    if (!employee) {
+      res.status(404).send({ message: "Employee not found" });
+      return;
+    }
+
+    res.send(employee);
+  } catch (error) {
+    res.status(500).send({ message: "Error updating employee" });
+  }
+};
+
+
+const deleteEmployeeHandler = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void | any> => {
+  try {
+    const employee = await Employee.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user?._id,
+    });
+
+    if (!employee) {
+      return res.status(404).send({ message: "Employee not found" });
+    }
+
+    // הסרת העובד מכל האירועים המשויכים
+    await Event.updateMany(
+      { employeeIds: req.params.id },
+      { $pull: { employeeIds: req.params.id } }
+    );
+
+    res.send(employee);
+  } catch (error) {
+    res.status(500).send({ message: "Error deleting employee" });
+  }
+};
+
+// ===== Event Assignment Routes =====
+const assignEmployeeToEventHandler = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void | any> => {
+  try {
+    const { eventId, employeeId } = req.params;
+
+    // בדיקה שהעובד והאירוע שייכים למשתמש
+    const employee = await Employee.findOne({
+      _id: employeeId,
+      user: req.user?._id,
+    });
+    const event = await Event.findOne({ _id: eventId, user: req.user?._id });
+
+    if (!employee || !event) {
+      return res.status(404).send({ message: "Employee or Event not found" });
+    }
+
+    // הוספה או הסרה של העובד
+    const updatedEvent = await Event.findOneAndUpdate(
+      { _id: eventId },
+      {
+        $addToSet: { employeeIds: employeeId }, // מוסיף רק אם לא קיים
+      },
+      { new: true }
+    );
+
+    res.send(updatedEvent);
+  } catch (error) {
+    res.status(500).send({ message: "Error assigning employee to event" });
+  }
+};
+
+const removeEmployeeFromEventHandler = async (
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void | any> => {
+  try {
+    const { eventId, employeeId } = req.params;
+
+    const updatedEvent = await Event.findOneAndUpdate(
+      { _id: eventId, user: req.user?._id },
+      { $pull: { employeeIds: employeeId } },
+      { new: true }
+    );
+
+    if (!updatedEvent) {
+      return res.status(404).send({ message: "Event not found" });
+    }
+
+    res.send(updatedEvent);
+  } catch (error) {
+    res.status(500).send({ message: "Error removing employee from event" });
+  }
+};
+const updateEventAssignmentHandler: AsyncRequestHandler = async (
+  req,
+  res,
+  next
+) => {
+  try {
+    const { eventId } = req.params;
+    const { employeeId, action } = req.body;
+
+    const event = await Event.findOne({ _id: eventId, user: req.user?._id });
+    if (!event) {
+      res.status(404).send({ message: "Event not found" });
+      return;
+    }
+
+    let update;
+    if (action === "add") {
+      update = { $addToSet: { employeeIds: employeeId } };
+    } else if (action === "remove") {
+      update = { $pull: { employeeIds: employeeId } };
+    } else {
+      res.status(400).send({ message: "Invalid action" });
+      return;
+    }
+
+    const updatedEvent = await Event.findByIdAndUpdate(eventId, update, {
+      new: true,
+    });
+
+    res.send(updatedEvent);
+  } catch (error) {
+    next(error);
+  }
+};
+
+const asyncHandler = (fn: AsyncRequestHandler): RequestHandler => {
+  return (req, res, next) => {
+    Promise.resolve(fn(req as AuthenticatedRequest, res, next)).catch(next);
+  };
+};
+// ===== Register All Routes =====
+// Employee routes
+app.post('/api/employees', authenticate, createEmployeeHandler);
+app.get('/api/employees', authenticate, getEmployeesHandler);
+app.put('/api/employees/:id', authenticate, updateEmployeeHandler);
+app.delete('/api/employees/:id', authenticate, deleteEmployeeHandler);
+
+// Event assignment routes
+app.post('/api/events/:eventId/assign/:employeeId', authenticate, assignEmployeeToEventHandler);
+app.delete('/api/events/:eventId/remove/:employeeId', authenticate, removeEmployeeFromEventHandler);
+
+// Existing routes
+app.post('/api/auth/register', registerHandler);
+app.post('/api/auth/login', loginHandler);
+app.get('/api/auth/me', authenticate, getMeHandler);
+app.get('/api/events', authenticate, getEventsHandler);
+app.get('/api', getIsAlive);
+app.post('/api/events', authenticate, createEventHandler);
+app.put('/api/events/:id', authenticate, updateEventHandler);
+app.delete('/api/events/:id', authenticate, deleteEventHandler);
+
 // Register routes
 app.post('/api/auth/register', registerHandler);
 app.post('/api/auth/login', loginHandler);
@@ -217,7 +385,14 @@ app.get('/api', getIsAlive );
 app.post('/api/events', authenticate, createEventHandler);
 app.put('/api/events/:id', authenticate, updateEventHandler);
 app.delete('/api/events/:id', authenticate, deleteEventHandler);
+// הוסף את הניתוב הבא ל-server.ts
+app.patch(
+  "/api/events/:eventId/employees",
+  authenticate,
+  asyncHandler(updateEventAssignmentHandler)
+);
 
 app.listen(PORT, () => {
   console.log(`✅ Server running on http://localhost:${PORT}`);
 });
+

@@ -20,7 +20,8 @@
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.14.0",
-    "my-express-ts-mongo": "file:"
+    "my-express-ts-mongo": "file:",
+    "puppeteer-core": "^24.8.2"
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
